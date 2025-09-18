@@ -8,7 +8,8 @@ inat_year <- function(x, pid, parkabbr){
     expr = {
       message(paste("getting iNat observations for year", x))
       # taxon_id=211194 is for vascular plants
-      obs <- rinat::get_inat_obs(taxon_id=211194, year = x, place_id=pid, maxresults = 10000) %>%
+      obs <- rinat::get_inat_obs(taxon_id=211194, year = x, place_id=pid, maxresults = 10000) |>
+        mutate(tag_list = as.character(tag_list)) |>
         select(-sound_url, -geoprivacy)
       if (nrow(obs) == 10000) {stop("max observations reached in a year,
                                        year needs to be further divided by months")}
@@ -22,7 +23,8 @@ inat_year <- function(x, pid, parkabbr){
 
       # This is just dummy data used to get columns from iNat:
       # maybe can just change this to NA or Null later, if working.
-      null_obs <- rinat::get_inat_obs(year = 2023, place_id=56788, maxresults = 3) %>%
+      null_obs <- rinat::get_inat_obs(year = 2025, place_id=56788, maxresults = 3) %>%
+        mutate(tag_list = as.character(tag_list)) |>
         select(-sound_url, -geoprivacy) %>%
         slice(0)
       null_obs
@@ -54,7 +56,7 @@ iNatObs <- function(x){
 
   # message
   message(paste("start", full_name))
-  year_test <- c(2008:2023)
+  year_test <- c(2008:2025)
 
   y <- lapply(year_test, inat_year, pid = placeID , parkabbr = park_code)
 
@@ -82,29 +84,42 @@ KALA <- dfpk[4,]
 KAHO <- dfpk[5,]
 WAPA <- dfpk[6,]
 
-
 AMME_list <- apply(X = AMME, MARGIN = 1, FUN = iNatObs)
 AMME_obs <- bind_rows(AMME_list)
+AMME_obs |>
+  count(year)
 
 HALE_list <- apply(X = HALE, MARGIN = 1, FUN = iNatObs)
 HALE_obs <- bind_rows(HALE_list)
+HALE_obs |>
+  count(year)
 
 HAVO_list <- apply(X = HAVO, MARGIN = 1, FUN = iNatObs)
 HAVO_obs <- bind_rows(HAVO_list)
+HAVO_obs |>
+  count(year)
 
 KALA_list <- apply(X = KALA, MARGIN = 1, FUN = iNatObs)
 KALA_obs <- bind_rows(KALA_list)
+KALA_obs |>
+  count(year)
 
 KAHO_list <- apply(X = KAHO, MARGIN = 1, FUN = iNatObs)
 KAHO_obs <- bind_rows(KAHO_list)
+KAHO_obs |>
+  count(year)
 
 WAPA_list <- apply(X = WAPA, MARGIN = 1, FUN = iNatObs)
 WAPA_obs <- bind_rows(WAPA_list)
+# WAPA error: Error in if (total_res == 0) { : argument is of length zero
 
-all_pacn_plant_obs <- bind_rows(AMME_obs, HALE_obs, HAVO_obs, KALA_obs, KAHO_obs, WAPA_obs)
-readr::write_csv(all_pacn_plant_obs, "master_pacn_inat.csv")
+all_hawaii_plant_obs <- bind_rows(HALE_obs, HAVO_obs, KALA_obs, KAHO_obs)
 
-master_pacn_inat <- readr::read_csv("master_pacn_inat.csv")
+repeats <- all_hawaii_plant_obs |>
+  count(scientific_name, parkabbr) |>
+  arrange(-n)
 
-master_dist <- master_pacn_inat %>%
+master_dist <- all_hawaii_plant_obs %>%
   distinct(scientific_name, parkabbr, .keep_all = TRUE)
+
+master_pacn_inat <- readr::read_csv("data/master_pacn_hi_inat.csv")
