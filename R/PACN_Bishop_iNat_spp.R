@@ -1,160 +1,137 @@
 library(pacnvegetation)
 library(tidyverse)
 
-# Steps to get an updated PACN species list (which itself uses NPSpecies):
-
-# Local Path to Veg Spp database 
-# skip step and use previously downloaded dataset if no access to Veg_species_db
-veg_species_db_folder <-"C:/Users/JJGross/Documents/Databases_copied_local/Veg_species_db"
-# If only one database in folder, this will grab full path:
-veg_species_db_full_path <- list.files(veg_species_db_folder,full.names = TRUE)
-veg_species_db_full_path
-raw_spp_data_orig <- pacnvegetation::read_spp_db(veg_species_db_full_path) #grab original copy for comparisons
-readr::write_csv(raw_spp_data_orig, "data/PACN_spp_list.csv")
-
-# Otherwise use previous test PACN species list provided in data folder
-pacn_spp_list <- read_csv("data/PACN_spp_list.csv")
-
-raw_spp_data <- read_spp_db(veg_species_db_full_path) #has repeats for every park
-raw_spp_data <- raw_spp_data %>% rename_at('Park', ~'ParkName') #make names match with future dfs
-
-#delete var and spp on list to make names match
-
-
-#make scientific names match and delete rows with alien and unknowns in them
-raw_spp_data$Scientific_name <- gsub("X ", "x ", raw_spp_data$Scientific_name)
-raw_spp_data <- raw_spp_data[!grepl("Unknown", raw_spp_data$Scientific_name),]
-raw_spp_data <- raw_spp_data[- grepl("Alien", raw_spp_data$Scientific_name),]
-raw_spp_data <- subset(raw_spp_data, !is.na(Scientific_name))
-
-#split scientific name into three columns based on the spaces in the string of characters:
-raw_spp_data[c('genus', 'species', 'extra')] <- str_split_fixed(raw_spp_data$Scientific_name, ' ', 3)
-#make Scientific_name the genus and species columns so that all other var. spp. etc are gone
-raw_spp_data$Scientific_name <- paste(raw_spp_data$genus, raw_spp_data$species, sep=" ")
-#delete extra rows (but could be important to keep the extra row just in case that is useful)
-raw_spp_data <- raw_spp_data %>% select(-genus,-species,-extra)
-
-#some still have spp. and x as their 'species', so delete those parts of the Scientific_name
-raw_spp_data <-mutate(raw_spp_data,Scientific_name=sapply(strsplit(raw_spp_data$Scientific_name, split=' spp.', fixed=TRUE),function(x) (x[1])))
-raw_spp_data <-mutate(raw_spp_data,Scientific_name=sapply(strsplit(raw_spp_data$Scientific_name, split=' X', fixed=TRUE),function(x) (x[1])))
-raw_spp_data <-mutate(raw_spp_data,Scientific_name=sapply(strsplit(raw_spp_data$Scientific_name, split=' x', fixed=TRUE),function(x) (x[1])))
-#now delete scientific names with only genus - make sure to specifically run!
-raw_spp_data <- raw_spp_data[grepl(" ", raw_spp_data$Scientific_name),]  
-
-#now raw_spp_data has all the scientific names (Scientific_name) for each park (ParkName) - one of each observation for species and park combinations. all scientific names with just the genus are deleted
-#not sure if this is the best way to make the names more uniform. Should I be keeping the var. and spp. etc. It also deletes names for hybrids. I want to make this code universal, but I'm having trouble figuring out the best way to do so. 
-
-#bring in bishop data to compare the accepted scientific names they have with the scientific names on the eaw_spp_data df by matching the Scientific_name of raw_spp_data to the Scientific_name of bishop1 (bishop data)
-library(dplyr)
 library(readxl)
+library(fuzzyjoin)
+library(stringdist)
+
+# 1. Load data ----
+# Collect the 3 species lists 
+# 1. POH = Bishop Museum's plants of Hawaii list, 
+# 2. pacn_veg_spp = PACN vegetation species list
+# 3. iNat_veg_NPS = iNaturalist plant observation list for Hawaii parks
+
+## BISH list ----
+# list provided by Bishop Museum's Timothy Gallaher <timothy.gallaher@bishopmuseum.org>
+# bishop_csv_path <- "C:/Users/JJGross/LocalDocuments/Databases_copied_local/BISH_spp/POH_Names_Table.csv"
+# bishop <- read_csv(bishop_csv_path)
+# write_csv(bishop, "data/POH_Names_Table.csv")
+
+# spp_POH <- read_csv("data/POH_Names_Table.csv")  
+# fix encoding issue in csv version
+# spp_POH$scientificName <- iconv(spp_POH$scientificName, from = "UTF-8", to = "UTF-8", sub = " ") # Replace invalid chars with a space
+
+# Excel version: 
+spp_POH_excel <- readxl::read_excel("data/POH_Names_Table.xlsx")
+
+std_spp_POH_excel <- spp_POH_excel |>
+  # Drop NULL from specificEpithet so just Genus can be displayed when needed
+  mutate(specificEpithet = str_replace(specificEpithet, "NULL", "")) |>
+  # Drop everything after species from scientific name
+  mutate(std_name = paste0(genus, " ", specificEpithet)) |>
+  # All family names to be matched:
+  mutate(std_name = case_when(genus == "NULL" & specificEpithet == "" ~ family,
+                   .default = std_name)) |>
+  # trim leading and trailing white space and other invisible characters
+  mutate(std_name = str_squish(std_name)) |>
+  mutate(hybrid = str_detect(scientificName, fixed("× "))) |>
+  mutate(std_name = case_when(hybrid == TRUE ~ scientificName,
+                              .default = std_name))
 
 
-spp_anti_join <- anti_join(raw_spp_data_orig, raw_spp_data)
+## PACN list ----
+# use previous PACN species list provided in data folder (created by R/PACN_spp_DB_list.R)
+# not there is similar function in pacnvegetation package:
+# read_spp_db(veg_species_db_full_path) #has repeats for every park
+spp_PACN <- read_csv("data/PACN_spp_list.csv") 
 
-bishop_csv_path <- "C:/Users/JJGross/Documents/Databases_copied_local/BISH_spp/POH_Names_Table.csv"
-bishop <- read_csv(bishop_csv_path)
-write_csv(bishop, "data/POH_Names_Table.csv")
-bishop <- read_csv("data/POH_Names_Table.csv")
+spp_PACN <- spp_PACN |>
+  filter(taxonRank != "forma") |>
+  filter(Code != "SNAG") |>
+  filter(Omit_in_NPSpecies == FALSE)
 
-# read_excel
-bish_spp_path <- "data/POH_Names_Table.xlsx"
-bish <- readxl::read_excel(bish_spp_path)
+#--- delete this when done ----
+#*** delete this when done ****
+spp_PACN <- spp_PACN %>%
+  distinct(Scientific_name, .keep_all = TRUE) 
+  
 
-# just use Hawaii Parks only (since POH is just for Hawaii)
-pacn <- raw_spp_data
-pacn <- raw_spp_data_orig |>
-  filter(Park %in% c("HALE", "HAVO", "KALA", "KAHO", "PUHE", "PUHO"))
+## iNat list ----
+spp_INAT <- read_csv("data/master_pacn_hi_inat.csv") 
 
-#dplyr::anti_join()
-
-# compare BISH scientific names to rsp scientific names
-pacn <- pacn %>%
-  #select(Scientific_name) %>%
-  distinct()
-
-bishop <- bish %>%
-#  select(scientificName) %>%
-  distinct()
-
-# all pacn spp with match in bish
-
-match_yes <- pacn |>
-  semi_join(bishop, join_by(Scientific_name == scientificName)) %>%
-  arrange(Scientific_name)
-
-match_no <- pacn |>
-  anti_join(bishop, join_by(Scientific_name == scientificName)) %>%
-  arrange(Scientific_name)
+spp_INAT_dist <- spp_INAT %>%
+  distinct(scientific_name, parkabbr, .keep_all = TRUE)
 
 
-#format data - rename scientific name column to match RSP (raw_spp_data) 
-# and delete duplicates; add row (bishop) that indicates the source
-bishop1 <- bishop %>%
-  select(scientificName, Accepted_scientificName) %>%
-  rename_at('scientificName', ~'Scientific_name')%>%
-  distinct(Scientific_name, .keep_all = TRUE)
-bishop1$bishop <- 'bishop'
+# 2. Match spp PACN -> BISH ----
 
-#make scientific names and A match through different formatting options 
-# (same way as the raw_spp_data)
-bishop1$Scientific_name <- gsub("X ", "x ", bishop1$Scientific_name)
-bishop1$Scientific_name <- gsub("<d7> ", "", bishop1$Scientific_name)
-bishop1 <- bishop1[grepl(" ", bishop1$Scientific_name),]
-
-bishop1[c('genus', 'species', 'extra')] <- str_split_fixed(bishop1$Scientific_name, ' ', 3)
-bishop1$Scientific_name <- paste(bishop1$genus, bishop1$species, sep=" ")
-bishop1 <- bishop1 %>% select(-genus,-species,-extra)
-
-bishop1 <-mutate(bishop1,Scientific_name=sapply(strsplit(bishop1$Scientific_name, split=' spp.', fixed=TRUE),function(x) (x[1])))
-bishop1 <-mutate(bishop1,Scientific_name=sapply(strsplit(bishop1$Scientific_name, split=' x', fixed=TRUE),function(x) (x[1])))
-bishop1 <-mutate(bishop1,Scientific_name=sapply(strsplit(bishop1$Scientific_name, split=' X', fixed=TRUE),function(x) (x[1])))
-bishop1 <- bishop1[grepl(" ", bishop1$Scientific_name),] #delete scientific names with only genus - make sure to specifically run!
+# Changes to spp_PACN:
+std_spp_PACN <- spp_PACN |> 
+  # Bishop does not have plant species list outside Hawaii so drop AMME, WAPA, NPSA
+  filter(!Park %in% c("AMME", "WAPA", "NPSA")) |>
+  # Drop everything past species from scientific name:
+  mutate(std_name = paste0(Genus, " ", Species)) |>
+  # Drop the 'sp.' and 'spp.' in 'Genus spp.' names because POH just uses Genus name only
+  mutate(std_name = case_when(Species == "spp." ~ Genus,
+                              .default = std_name)) |>
+  # for subspecies, use "subsp." instead of "ssp."
+  mutate(std_name = str_replace(std_name, " X ", " × ")) |>
+  mutate(std_name = str_squish(std_name))
 
 
 
-#same way/thing with the accepted names
-bishop1$Accepted_scientificName <- gsub("X ", "x ", bishop1$Accepted_scientificName)
-bishop1$Accepted_scientificName <- gsub("<d7> ", "", bishop1$Accepted_scientificName)
-bishop1 <- bishop1[grepl(" ", bishop1$Accepted_scientificName),]
-
-bishop1[c('genus', 'species', 'extra')] <- str_split_fixed(bishop1$Accepted_scientificName, ' ', 3)
-bishop1$Accepted_scientificName <- paste(bishop1$genus, bishop1$species, sep=" ")
-bishop1 <- bishop1 %>% select(-genus,-species,-extra)
-
-bishop1 <-mutate(bishop1,Accepted_scientificNamee=sapply(strsplit(bishop1$Accepted_scientificName, split=' spp.', fixed=TRUE),function(x) (x[1])))
-bishop1 <-mutate(bishop1,Accepted_scientificName=sapply(strsplit(bishop1$Accepted_scientificName, split=' x', fixed=TRUE),function(x) (x[1])))
-bishop1 <-mutate(bishop1,Accepted_scientificName=sapply(strsplit(bishop1$Accepted_scientificName, split=' X', fixed=TRUE),function(x) (x[1])))
-bishop1 <- bishop1[grepl(" ", bishop1$Accepted_scientificName),] #delete scientific names with only genus - make sure to specifically run!
 
 
-#make copy of im data to not mess up the original df - only keep distinct names and only keep scientific name column
-IMlol <- raw_spp_data %>%
-  distinct(Scientific_name, .keep_all = TRUE)%>%
-  select(Scientific_name)
-IMlol$im <- 'im' #make row that indicates this data is from IM
+# All records in spp_PACN$Scientific_name should eventually match spp_POH$scientificName
 
-#combine im and bishop data in a way that places NAs in the row if one df has the species and the other doesnt
-alllol <- merge(IMlol, bishop1, by = "Scientific_name", all = TRUE)
-#get rid of all NAs in IM column meaning those species on bishop's list that aren't in IM's list are deleted
-alllol <- subset(alllol, !is.na(im))
+# anti_join = all rows in x that do not have corresponding values in y
 
-#merge list with accepted names to main RSD in RSD1 (now have all the species for each park again, not distinct species names)
-#raw_spp_data1 <- merge(raw_spp_data, alllol, by = "Scientific_name", all = TRUE)
 
-#Accepted_scientificNameCorrect is the right scientific name and Scientific_name is the old scientific names
-#this code is saying if there is na value in the accepted scientific name, use the original scientific name, and if there isnt use the accepted scientific name column values
-alllol$Accepted_scientificNameCorrect <- ifelse(is.na(alllol$Accepted_scientificName), alllol$Scientific_name, alllol$Accepted_scientificName)
-#make things a little easier to see
-alllol <- select(alllol,Scientific_name, Accepted_scientificNameCorrect)
 
-#merge correct name list with the original IM data by the old scientific name column
-raw_spp_data <- merge(raw_spp_data, alllol, by = "Scientific_name", all = TRUE)
+no_match_bish <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = "std_name")
 
-#make the NAs in the ASNcorrect column what the names in scientific name column are - then delete the scientific name column
-raw_spp_data <- mutate(raw_spp_data, Scientific_nameUpdated=coalesce(Accepted_scientificNameCorrect, Scientific_name))
-#makes this a smaller file so that it can actually be combined with the inat data witout crashing my R lol
-raw_spp_data <- distinct(raw_spp_data, Accepted_scientificNameCorrect, ParkName)
-#WOOOOOOOOOOOO YEAHHHHHHHHH 
+# Check to see why records in 'no_match_bish' aren't matching, and make notes
+readr::write_csv(no_match_bish, file = "no_match_bish.csv")
+
+# Some hybrids not matching correctly because names sometimes have genus sometimes not
+# Can try to use fuzzy join on hybrids possibly...
+#no_match_fuzzy <- stringdist_anti_join(x = std_spp_PACN, 
+#                                 y = std_spp_POH_excel, 
+#                                 by = join_by(std_name), 
+#                                 max_dist = 2,
+#                                 distance_col = "distance")
+
+
+
+
+match_bish <- left_join(x = std_spp_PACN, y = std_spp_POH_excel, by = join_by(std_name == scientificName))
+#................... still needs addressed .....................................
+
+# Find repeats within spp_POH$scientificName - need to ensure joins match correct rows since there are repeats:
+duplicate_rows <- std_spp_POH_excel %>%
+  group_by(scientificName) %>%
+  filter(n() > 2) %>%
+  ungroup()
+
+#*** need to address Authority/Authorship which is causing multiple rows to be matched in POH ****
+no_match_auth <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = join_by(std_name == scientificName, Authority == scientificNameAuthorship))
+#...............................................................................
+
+
+
+
+# 2. Match spp PACN(BISH) -> iNat ----
+
+no_match_inat <- anti_join(x = match_bish, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
+
+match_inat <- left_join(x = match_bish, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
+
+
+
+
+
+
+
 
 ### adding in iNat ####
 #import iNat data that was previously downloaded
