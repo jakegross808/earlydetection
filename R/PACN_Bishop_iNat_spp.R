@@ -2,8 +2,8 @@ library(pacnvegetation)
 library(tidyverse)
 
 library(readxl)
-library(fuzzyjoin)
-library(stringdist)
+#library(fuzzyjoin)
+#library(stringdist)
 
 # 1. Load data ----
 # Collect the 3 species lists 
@@ -50,10 +50,10 @@ spp_PACN <- spp_PACN |>
   filter(Code != "SNAG") |>
   filter(Omit_in_NPSpecies == FALSE)
 
-#--- delete this when done ----
+#--- delete distinct() when script finalized so all species in all parks are used----
 #*** delete this when done ****
-spp_PACN <- spp_PACN %>%
-  distinct(Scientific_name, .keep_all = TRUE) 
+#spp_PACN <- spp_PACN %>%
+#  distinct(Scientific_name, .keep_all = TRUE) 
   
 
 ## iNat list ----
@@ -88,10 +88,14 @@ std_spp_PACN <- spp_PACN |>
 
 
 
-no_match_bish <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = "std_name")
+no_match_bish <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = "std_name") |>
+  arrange(Taxonomic_Family, Scientific_name)
 
 # Check to see why records in 'no_match_bish' aren't matching, and make notes
-readr::write_csv(no_match_bish, file = "no_match_bish.csv")
+
+#####no_match_bish$std_name <- iconv(no_match_bish$std_name, from = "UTF-8", to = "UTF-8", sub = " ") # Replace invalid chars with a space
+
+readr::write_excel_csv(no_match_bish, file = "no_match_bish_excel.csv")
 
 # Some hybrids not matching correctly because names sometimes have genus sometimes not
 # Can try to use fuzzy join on hybrids possibly...
@@ -122,11 +126,38 @@ no_match_auth <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = join_by
 
 # 2. Match spp PACN(BISH) -> iNat ----
 
-no_match_inat <- anti_join(x = match_bish, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
+# Take Genus and Family from accepted scientific names and make it a separate 
+# record in Accepted_scientificName - this way it will not show as new observation
+# from iNat 
+length(unique(match_bish$Accepted_scientificName))
 
-match_inat <- left_join(x = match_bish, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
+names(match_bish)
 
+match_bish_select <- match_bish |>
+  select(Species_ID:std_name, std_name_POH = std_name.y, Accepted_scientificName, acceptedNameUsageID, )
 
+pacn_bish_accepted <- match_bish_select |>
+  left_join(spp_POH_excel, by = join_by(acceptedNameUsageID == taxonID))
+
+new_family <- pacn_bish_accepted |>
+  filter(Taxonomic_Family != family) |>
+  select(Species_ID, Taxonomic_Family, std_name, std_name_POH, scientificName, family) |>
+  filter(family != "NULL")
+  
+length(unique(pacn_bish_accepted$family))
+length(unique(pacn_bish_accepted$order))
+
+orders <- pacn_bish_accepted |>
+  select(order, family, scientificName, vernacularName, Nativeness) |>
+  distinct() |>
+  arrange(order, family, scientificName)
+readr::write_excel_csv(orders, file = "orders.csv")
+
+no_match_inat <- anti_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
+
+match_inat <- inner_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
+
+new_plants <- anti_join(x = spp_INAT_dist, y = Accepted, by = join_by(scientific_name == Accepted_scientificName))
 
 
 
