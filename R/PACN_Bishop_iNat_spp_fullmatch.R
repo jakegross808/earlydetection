@@ -22,12 +22,12 @@ POH1 <- spp_POH_excel |>
          POH_Auth = scientificNameAuthorship, 
          POH_Accepted_Name = Accepted_scientificName) 
 
-spp_POH_excel2 <- readxl::read_excel("data/POH Nomenclator 20251119.xlsx")
-POH2 <- spp_POH_excel2 |>
-  select(POH_name = scientificName, 
-         POH_Auth = scientificNameAuthorship, 
-         POH_Accepted_Name = `Accepted Name`, 
-         POH_Accepted_Name_Auth = `Accepted Name Author`)
+#spp_POH_excel2 <- readxl::read_excel("data/POH Nomenclator 20251119.xlsx")
+#POH2 <- spp_POH_excel2 |>
+#  select(POH_name = scientificName, 
+#         POH_Auth = scientificNameAuthorship, 
+#         POH_Accepted_Name = `Accepted Name`, 
+#         POH_Accepted_Name_Auth = `Accepted Name Author`)
   
 
 ## PACN list ----
@@ -65,10 +65,6 @@ PACN <- spp_PACN |>
   filter(!Park %in% c("AMME", "WAPA", "NPSA")) |>
   distinct(Scientific_name, .keep_all = TRUE) |>
   filter(Code != "SNAG") |>
-  # Use only the records that are in NPSpecies:
-  # filter(Omit_in_NPSpecies == FALSE)
-  # Drop everything past species from scientific name:
-  # mutate(std_name = paste0(Genus, " ", Species)) |>
   # Drop the 'sp.' and 'spp.' in 'Genus spp.' names because POH just uses Genus name only
   mutate(std_name = case_when(Species == "spp." ~ Genus,
                               .default = Scientific_name)) |>
@@ -95,47 +91,6 @@ POH_fuzzyjoin <- fuzzyjoin::stringdist_left_join(x = s_PACN, y = POH1,
                                                 max_dist = 5, distance_col = "distance"
                                                 )
 
-
-
-
-
-
-dotest1_noauth <- fuzzyjoin::stringdist_left_join(x = s_PACN, y = POH2, 
-                                         by = c("PACN_name" = "POH_name"), 
-                                         distance_col = "dist", 
-                                         max_dist = 5)
-
-test1_noauth2 <- test1_noauth |>
-    group_by(PACN_name) |>
-    slice_min(dist)
-  
-
-#test1_noauth2 <- test1_noauth |>
-#  group_by(PACN_name) |>
-#  slice_min(dist)
-  
-
-# Test2 uses updated BISH list (incomplete waiting on Tim)
-#test2_noauth <- fuzzyjoin::stringdist_left_join(x = s_PACN, y = POH2, 
-#                                         by = c("PACN_name" = "POH_name"), 
-#                                         distance_col = "dist", max_dist = 5)
-
-
-#test2_noauth2 <- test2_noauth |>
-#  group_by(PACN_name) |>
-#  slice_min(dist)
-
-
-# Test3 attempts to incorporate Auth into fuzzy join
-#test3 <- fuzzyjoin::stringdist_left_join(x = s_PACN, y = POH2, 
-#                                        by = c("PACN_name" = "POH_name", 
-#                                               "PACN_Auth" = "POH_Auth"), 
-#                                        distance_col = "dist", max_dist = 5)
-
-#test3_2 <- test3 |>
-#  mutate(dist = PACN_name.dist + PACN_Auth.dist) |>
-#  group_by(PACN_name, PACN_Auth) |>
-#  slice_min(dist)
 
 ## Match YES ----
 POH1_matches <- POH_fuzzyjoin |>
@@ -171,6 +126,8 @@ POH_PACN_cw <- bind_rows(POH1_matches_dups_no, POH1_matches_dups)
 ## Match NO ----
 POH1_no_matches <- POH_fuzzyjoin |>
   filter(is.na(distance)) |>
+  distinct () |>
+  mutate(name_match_category = "no match in BISH database")
   
    
 
@@ -179,36 +136,41 @@ POH1_unsure_matches <- POH_fuzzyjoin |>
   filter(distance > 0) |>
   filter(!PACN_name %in% POH_PACN_cw$PACN_name) |>
   group_by(PACN_name) |>
-  slice_min(distance) 
-  
+  slice_min(distance) |>
+  distinct (PACN_name, PACN_Auth, .keep_all = TRUE) |>
+  mutate(name_match_category = "best guess from fuzzy join - needs checked")
+
+## Compute totals  
 nrow(POH_PACN_cw)  
 nrow(POH1_no_matches)
 nrow(POH1_unsure_matches)
-
 nrow(POH_PACN_cw) + nrow(POH1_no_matches) + nrow(POH1_unsure_matches)
 
 POH_PACN_cw_final <- bind_rows(POH_PACN_cw, POH1_no_matches, POH1_unsure_matches)
 
+POH_PACN_cw_final_dups <- POH_PACN_cw_final |>
+  group_by(PACN_name) |>
+  count()
 
 
 
 
-no_match_fuzzy <- stringdist_anti_join(x = PACN, 
-                                       y = POH, 
-                                       by = join_by(Scientific_name == scientificName), 
-                                       max_dist = 2,
-                                       distance_col = "distance")
+## export sp_to_review ----
 
+sp_to_review <- POH_PACN_cw_final |>
+  filter(name_match_category == "no match in BISH database" |
+           name_match_category == "best guess from fuzzy join - needs checked")
 
-# All records in spp_PACN$Scientific_name should eventually match spp_POH$scientificName
-
-# anti_join = all rows in x that do not have corresponding values in y
+readr::write_excel_csv(sp_to_review, file = "sp_to_review.csv")
 
 
 
-no_match_bish <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = "std_name") |>
-  arrange(Taxonomic_Family, Scientific_name)
 
+
+
+
+
+#.....-----
 # Check to see why records in 'no_match_bish' aren't matching, and make notes
 
 #####no_match_bish$std_name <- iconv(no_match_bish$std_name, from = "UTF-8", to = "UTF-8", sub = " ") # Replace invalid chars with a space
