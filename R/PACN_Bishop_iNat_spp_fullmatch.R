@@ -17,7 +17,7 @@ library(fuzzyjoin)
 # lists provided by Bishop Museum's Timothy Gallaher <timothy.gallaher@bishopmuseum.org>
 
 
-spp_POH_excel <- readxl::read_excel("data/BISH_Taxon_Table_12_18_2025.xlsx")
+spp_poh_excel <- readxl::read_excel("data/BISH_Taxon_Table_12_18_2025.xlsx")
 
 # # checks to compare previous BISH spreadsheet
 # spp_POH_excel_old <- readxl::read_excel("data/POH_Names_Table.xlsx")
@@ -294,13 +294,20 @@ readr::write_excel_csv(sp_to_review, file = "sp_to_review.csv")
 
 # 3. Match accepted names -> iNat ----
 
+PACN_POH_crosswalk <- read_csv(file = "data/PACN_POH_crosswalk.csv")
+
+names(PACN_POH_crosswalk)
+
+PACN_POH_crosswalk_final_export <- PACN_POH_crosswalk |>
+  rename(poh_accepted_name = POH_scientificName,
+         poh_accepted_status = POH_taxonomicStatus)
+
 # Take Genus and Family from accepted scientific names and make it a separate 
 # record in Accepted_scientificName - this way it will not show as new observation
 # from iNat 
 
 # Drop most of 
-match_bish_select <- POH_PACN_cw_final |>
-  select(Species_ID:std_name, std_name_POH = std_name.y, Accepted_scientificName, acceptedNameUsageID, )
+match_bish_select <- PACN_POH_crosswalk 
 
 pacn_bish_accepted <- match_bish_select |>
   left_join(spp_POH_excel, by = join_by(acceptedNameUsageID == taxonID))

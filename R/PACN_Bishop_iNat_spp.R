@@ -1,27 +1,19 @@
 library(pacnvegetation)
 library(tidyverse)
-
 library(readxl)
+
 #library(fuzzyjoin)
 #library(stringdist)
 
 # 1. Load data ----
 # Collect the 3 species lists 
 # 1. POH = Bishop Museum's plants of Hawaii list, 
-# 2. pacn_veg_spp = PACN vegetation species list
-# 3. iNat_veg_NPS = iNaturalist plant observation list for Hawaii parks
+# 2. PACN = PACN vegetation species list
+# 3. iNat = iNaturalist plant observation list for Hawaii parks
 
-## BISH list ----
+## POH list ----
 # list provided by Bishop Museum's Timothy Gallaher <timothy.gallaher@bishopmuseum.org>
-# bishop_csv_path <- "C:/Users/JJGross/LocalDocuments/Databases_copied_local/BISH_spp/POH_Names_Table.csv"
-# bishop <- read_csv(bishop_csv_path)
-# write_csv(bishop, "data/POH_Names_Table.csv")
 
-# spp_POH <- read_csv("data/POH_Names_Table.csv")  
-# fix encoding issue in csv version
-# spp_POH$scientificName <- iconv(spp_POH$scientificName, from = "UTF-8", to = "UTF-8", sub = " ") # Replace invalid chars with a space
-
-# Excel version: 
 spp_POH_excel <- readxl::read_excel("data/POH_Names_Table.xlsx")
 
 std_spp_POH_excel <- spp_POH_excel |>
@@ -29,31 +21,28 @@ std_spp_POH_excel <- spp_POH_excel |>
   mutate(specificEpithet = str_replace(specificEpithet, "NULL", "")) |>
   # Drop everything after species from scientific name
   mutate(std_name = paste0(genus, " ", specificEpithet)) |>
-  # All family names to be matched:
+  # Add "family" plant taxonomic names to also be matched:
   mutate(std_name = case_when(genus == "NULL" & specificEpithet == "" ~ family,
                    .default = std_name)) |>
   # trim leading and trailing white space and other invisible characters
   mutate(std_name = str_squish(std_name)) |>
   mutate(hybrid = str_detect(scientificName, fixed("× "))) |>
+  # Use original POH name if its a hybrid species
   mutate(std_name = case_when(hybrid == TRUE ~ scientificName,
                               .default = std_name))
 
 
 ## PACN list ----
 # use previous PACN species list provided in data folder (created by R/PACN_spp_DB_list.R)
-# not there is similar function in pacnvegetation package:
+# note there is similar function in pacnvegetation package:
 # read_spp_db(veg_species_db_full_path) #has repeats for every park
 spp_PACN <- read_csv("data/PACN_spp_list.csv") 
 
 spp_PACN <- spp_PACN |>
   filter(taxonRank != "forma") |>
   filter(Code != "SNAG") |>
+  # Use only the records that are in NPSpecies:
   filter(Omit_in_NPSpecies == FALSE)
-
-#--- delete distinct() when script finalized so all species in all parks are used----
-#*** delete this when done ****
-#spp_PACN <- spp_PACN %>%
-#  distinct(Scientific_name, .keep_all = TRUE) 
   
 
 ## iNat list ----
@@ -109,6 +98,7 @@ readr::write_excel_csv(no_match_bish, file = "no_match_bish_excel.csv")
 
 
 match_bish <- left_join(x = std_spp_PACN, y = std_spp_POH_excel, by = join_by(std_name == scientificName))
+
 #................... still needs addressed .....................................
 
 # Find repeats within spp_POH$scientificName - need to ensure joins match correct rows since there are repeats:
@@ -124,15 +114,13 @@ no_match_auth <- anti_join(x = std_spp_PACN, y = std_spp_POH_excel, by = join_by
 
 
 
-# 2. Match spp PACN(BISH) -> iNat ----
+# 3. Match accepted names -> iNat ----
 
 # Take Genus and Family from accepted scientific names and make it a separate 
 # record in Accepted_scientificName - this way it will not show as new observation
 # from iNat 
-length(unique(match_bish$Accepted_scientificName))
 
-names(match_bish)
-
+# Drop most of 
 match_bish_select <- match_bish |>
   select(Species_ID:std_name, std_name_POH = std_name.y, Accepted_scientificName, acceptedNameUsageID, )
 
@@ -151,13 +139,24 @@ orders <- pacn_bish_accepted |>
   select(order, family, scientificName, vernacularName, Nativeness) |>
   distinct() |>
   arrange(order, family, scientificName)
+
 readr::write_excel_csv(orders, file = "orders.csv")
+
+
+# plants from iNat that do not match pacn_bish_accepted may be new introductions 
+# to park 
+new_plants <- anti_join(x = spp_INAT_dist, y = pacn_bish_accepted, by = join_by(scientific_name == scientificName))
+
+new_plants2 <- new_plants |>
+  separate_wider_delim(scientific_name, " ", names = c('inat_genus', 'inat_species', 'extra'), too_many = "merge", too_few = "align_start")
+  
+
 
 no_match_inat <- anti_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
 
 match_inat <- inner_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
 
-new_plants <- anti_join(x = spp_INAT_dist, y = Accepted, by = join_by(scientific_name == Accepted_scientificName))
+
 
 
 
