@@ -4,46 +4,80 @@ library(readxl)
 library(fuzzyjoin)
 
 
-# 1. Match accepted names -> iNat ----
+# 1. Load Tables ----
 
 pacn_bish_crosswalk <- read_csv(file = "data/pacn_bish_crosswalk.csv")
-master_pacn_inat <- readr::read_csv("data/master_pacn_hi_inat.csv")
 
+master_pacn_inat <- readr::read_csv("data/master_pacn_hi_inat.csv") |>
+  filter(!parkName %in% c("AMME", "WAPA"))
+
+# 2. Select Fields ----
 names(pacn_bish_crosswalk)
+names(master_pacn_inat)
 
-#inat_crosswalk <- pacn_bish_crosswalk 
-  #rename(poh_accepted_name = POH_scientificName,
-  #       poh_accepted_status = POH_taxonomicStatus)
+inat_obs <- master_pacn_inat |>
+  select(created_at, observed_on_string, 
+         taxon.name, taxon.rank, taxon.preferred_common_name, 
+         uri, location, geoprivacy, 
+         positional_accuracy_meters = positional_accuracy, 
+         user.login, park, parkName)
 
-# Take Genus and Family from accepted scientific names and make it a separate 
-# record in Accepted_scientificName - this way it will not show as new observation
-# from iNat 
+# 3. PACN iNaturalist obs ----
+veg_crew_obs <- inat_obs |>
+  filter(user.login == "pacn_plants") 
+table(veg_crew_obs$parkName)
 
-pacn_spp_full_scientificName_old <- pacn_bish_crosswalk |>
-  select(pacn_observation = bish_name) |>
+# 4. Known PACN plant names ----
+# (Per Park)
+
+## ...Name match issues ----
+
+#***These species show up in iNat as mismatches, but are known to occur:
+#*** need addressed in PACN database and/or BISH***
+
+pacn_bish_crosswalk_fix_issues <- pacn_bish_crosswalk |>
+  mutate(bish_scientificName = 
+           case_match(
+             bish_scientificName,
+             "Psydrax odorata" ~ "Psydrax odoratus", # in Imada et al. 2025 as Psydrax odorata (G.Forst.) A.C.Sm. & S.P.Darwin
+             "Schizachyrium condensatum" ~ "Schizachyrium microstachyum", # in Imada 2025, but not in BISH database export??
+             "Phaius tankervilleae" ~ "Calanthe tankervilleae", # Old name according to Imada 2025 - current disposition = "Phaius tankervilleae"
+             .default = bish_scientificName) 
+  )
+
+# last used PACN scientific name before BISH 2025 update
+pacn_spp_full_scientificName_old <- pacn_bish_crosswalk_fix_issues |>
+  select(pacn_observation = bish_name, Park) |>
   mutate(pacn_observation = str_replace_all(pacn_observation, "\\b\\w+\\.\\s*", ""))
 
-pacn_spp_full_scientificName <- pacn_bish_crosswalk |>
-  select(pacn_observation = bish_scientificName) |>
+# accepted scientific name (full name - including var., subsp., etc)
+pacn_spp_full_scientificName <- pacn_bish_crosswalk_fix_issues |>
+  select(pacn_observation = bish_scientificName, Park) |>
   mutate(pacn_observation = str_replace_all(pacn_observation, "\\b\\w+\\.\\s*", ""))
 
-pacn_spp_genus_and_species <- pacn_bish_crosswalk |>
+# accepted scientific name (just genus and species)
+pacn_spp_genus_and_species <- pacn_bish_crosswalk_fix_issues |>
   mutate(bish_specificEpithet2 = case_when(bish_specificEpithet == "NULL" ~ "", .default = bish_specificEpithet)) |>
   mutate(genus_and_species = paste(bish_genus, bish_specificEpithet2, sep = " ")) |>
-  select(pacn_observation = genus_and_species)
+  select(pacn_observation = genus_and_species, Park)
 
-pacn_spp_genera <- pacn_bish_crosswalk |>
-  select(pacn_observation = bish_genus)
+# accepted genus
+pacn_spp_genera <- pacn_bish_crosswalk_fix_issues |>
+  select(pacn_observation = bish_genus, Park)
 
-pacn_spp_families <- pacn_bish_crosswalk |>
-  select(pacn_observation = bish_family)
+# accepted family
+pacn_spp_families <- pacn_bish_crosswalk_fix_issues |>
+  select(pacn_observation = bish_family, Park)
 
-pacn_spp_orders <- pacn_bish_crosswalk |>
-  select(pacn_observation = bish_order)
+# accepted order
+pacn_spp_orders <- pacn_bish_crosswalk_fix_issues |>
+  select(pacn_observation = bish_order, Park)
 
-pacn_spp_classes <- pacn_bish_crosswalk |>
-  select(pacn_observation = bish_class)
+# accepted class
+pacn_spp_classes <- pacn_bish_crosswalk_fix_issues |>
+  select(pacn_observation = bish_class, Park)
 
+# combine all names
 pacn_observations <- bind_rows(pacn_spp_full_scientificName_old,
                                pacn_spp_full_scientificName, 
                        pacn_spp_genus_and_species, 
@@ -53,142 +87,42 @@ pacn_observations <- bind_rows(pacn_spp_full_scientificName_old,
                        pacn_spp_classes) |>
   distinct() 
 
-view(pacn_observations$pacn_observation)
-
-# plants from iNat that do not match pacn_observations may be new introductions 
-# to park 
-
-inat_pacn_new_plants <- master_pacn_inat |>
-  filter(!scientific_name %in% pacn_observations$pacn_observation)
+# 5. Drop some iNat obs ----
 
 
-new_plants <- anti_join(x = spp_INAT_dist, y = pacn_bish_accepted, by = join_by(scientific_name == scientificName))
+# Determine what records to limit on iNaturalist (for example: drop observations of
+# Magnoliopsida (Dicots), and just keep family, genus, species and and finer level stuff.)
+inat_obs_all <- inat_obs |>
+  mutate(row_id = row_number()) 
 
-new_plants2 <- new_plants |>
-  separate_wider_delim(scientific_name, " ", names = c('inat_genus', 'inat_species', 'extra'), too_many = "merge", too_few = "align_start")
+inat_obs_filtered <- inat_obs_row |>
+  filter(!str_detect(taxon.name, "Argyroxiphium")) |> # Drop silversword, too many weird hybrid names
+  filter(taxon.rank %in% c("family", "genus", "species", "subspecies", 
+                           "variety", "hybrid", "genushybrid", "form"))
 
+inat_pacn_new_plants_all <- inat_obs_all |>
+  anti_join(pacn_observations, by = c("taxon.name" = "pacn_observation", "parkName" = "Park"))
 
+inat_pacn_new_plants_filtered <- inat_obs_filtered |>
+  anti_join(pacn_observations, by = c("taxon.name" = "pacn_observation", "parkName" = "Park"))
 
-no_match_inat <- anti_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
-
-match_inat <- inner_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
-
-
-
-
-
-
-
-
-
-
+dropped <- inat_pacn_new_plants_all |>
+  anti_join(inat_pacn_new_plants_filtered, by = "row_id")
 
 
+undocumented_pacn_obs <- inat_pacn_new_plants_filtered
+nrow(undocumented_pacn_obs) # 20260114 = 612
 
+undocumented_pacn_plants <- undocumented_pacn_obs |>
+  group_by(taxon.name, parkName) |>
+  summarise(n = n())
+nrow(undocumented_pacn_plants) #20260114 =251
 
-
-# OLD delete Match accepted names -> iNat ----
-
-# Take Genus and Family from accepted scientific names and make it a separate 
-# record in Accepted_scientificName - this way it will not show as new observation
-# from iNat 
-
-# Drop most of 
-match_bish_select <- match_bish |>
-  select(Species_ID:std_name, std_name_POH = std_name.y, Accepted_scientificName, acceptedNameUsageID, )
-
-pacn_bish_accepted <- match_bish_select |>
-  left_join(spp_POH_excel, by = join_by(acceptedNameUsageID == taxonID))
-
-new_family <- pacn_bish_accepted |>
-  filter(Taxonomic_Family != family) |>
-  select(Species_ID, Taxonomic_Family, std_name, std_name_POH, scientificName, family) |>
-  filter(family != "NULL")
-
-length(unique(pacn_bish_accepted$family))
-length(unique(pacn_bish_accepted$order))
-
-orders <- pacn_bish_accepted |>
-  select(order, family, scientificName, vernacularName, Nativeness) |>
-  distinct() |>
-  arrange(order, family, scientificName)
-
-readr::write_excel_csv(orders, file = "orders.csv")
-
-
-# plants from iNat that do not match pacn_bish_accepted may be new introductions 
-# to park 
-new_plants <- anti_join(x = spp_INAT_dist, y = pacn_bish_accepted, by = join_by(scientific_name == scientificName))
-
-new_plants2 <- new_plants |>
-  separate_wider_delim(scientific_name, " ", names = c('inat_genus', 'inat_species', 'extra'), too_many = "merge", too_few = "align_start")
-
-
-
-no_match_inat <- anti_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
-
-match_inat <- inner_join(x = Accepted, y = spp_INAT_dist, by = join_by(Accepted_scientificName == scientific_name))
-
-
-
-
-
-
-
-
-### adding in iNat ####
-#import iNat data that was previously downloaded
-master_pacn_inat <- read.csv("C:/Users/sbierker/Desktop/R work/Independent Project/master_pacn_inat.csv")
-#make data match in same way as the other two times
-master_pacn_inat[c('genus', 'species', 'extra')] <- str_split_fixed(master_pacn_inat$Scientific_name, ' ', 3)
-master_pacn_inat$Scientific_name <- paste(master_pacn_inat$genus, master_pacn_inat$species, sep=" ")
-master_pacn_inat <- master_pacn_inat %>% select(-genus,-species,-extra)
-master_pacn_inat$Scientific_name <- gsub("X ", "x ", master_pacn_inat$Scientific_name)
-master_pacn_inat <-mutate(master_pacn_inat,Scientific_name=sapply(strsplit(master_pacn_inat$Scientific_name, split=' spp.', fixed=TRUE),function(x) (x[1])))
-master_pacn_inat <-mutate(master_pacn_inat,Scientific_name=sapply(strsplit(master_pacn_inat$Scientific_name, split=' x', fixed=TRUE),function(x) (x[1])))
-master_pacn_inat <-mutate(master_pacn_inat,Scientific_name=sapply(strsplit(master_pacn_inat$Scientific_name, split=' X', fixed=TRUE),function(x) (x[1])))
-master_pacn_inat <- master_pacn_inat[grepl(" ", master_pacn_inat$Scientific_name),] #delete scientific names with only genus - make sure to specifically run!
-
-#make row that says where this data is from
-master_pacn_inat$inat <- 'inat'
-
-#make copy of raw_spp_data just a preference honestly
-raw_spp_data2 <- raw_spp_data %>%
-  select(Accepted_scientificNameCorrect, ParkName)
-raw_spp_data2$im <- 'im'
-
-#merge inat data by new names of im species
-fullSP <- merge(master_pacn_inat, raw_spp_data2, by.x=c('Scientific_name', 'ParkName'), by.y=c('Accepted_scientificNameCorrect', 'ParkName'), all = T)
-
-#ifelse to get source column
-fullSP$source <- ifelse(is.na(fullSP$im)&fullSP$inat=='inat', 'inat',
-                        ifelse(is.na(fullSP$inat)&fullSP$im=='im', 'im', 'both'))
-
-
-#select by source so that only those from inat are left and make a column that indicates if the inat obs is a species that is only found on inat (new)
-new_pacn_inat <- fullSP %>%
-  subset(select = -c(inat, im))
-new_pacn_inat$new <- ifelse(new_pacn_inat$source=='inat', 'TRUE', 'FALSE')
-master_pacn_inat <- new_pacn_inat
-master_pacn_inat <- filter(master_pacn_inat, source!='im')
+write_csv(undocumented_pacn_obs, "data/undocumented_pacn_obs.csv")
+write_csv(undocumented_pacn_plants, "data/undocumented_pacn_plants.csv")
 
 #download that dataset
-write.csv(master_pacn_inat, "C:/Users/sbierker/Desktop/R work/Independent Project/master_pacn_inat.csv", row.names=F)
-
-#another species list with just species only found on inat
-new_pacn_inat <- filter(new_pacn_inat, source=='inat')
-write.csv(new_pacn_inat, "C:/Users/sbierker/Desktop/R work/Independent Project/new_pacn_inat.csv", row.names=F)
-
-
-
-#### extra just to check things ####
-#dataset with only distinct species, not all observations
-new_pacn_dist <- new_pacn_inat %>%
-  distinct(Scientific_name, ParkName, .keep_all = TRUE) %>%
-  select(Scientific_name,ParkName, new)
-new_pacn_dist$new='TRUE'
-
-
-write.csv(new_pacn_inat, "C:/Users/sbierker/Desktop/R work/Independent Project/new_pacn_inat.csv", row.names=T)
+#write.csv(master_pacn_inat, "C:/Users/sbierker/Desktop/R work/Independent Project/master_pacn_inat.csv", row.names=F)
+#write.csv(new_pacn_inat, "C:/Users/sbierker/Desktop/R work/Independent Project/new_pacn_inat.csv", row.names=T)
 
 
