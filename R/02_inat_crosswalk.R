@@ -1,7 +1,7 @@
 library(pacnvegetation)
 library(tidyverse)
-library(readxl)
-library(fuzzyjoin)
+#library(readxl)
+#library(fuzzyjoin)
 
 
 # 1. Load Tables ----
@@ -17,12 +17,10 @@ inat_obs <- inat_park_obs |>
   left_join(pacn_inat_places, by = join_by(place_id_query == placeID)) |>
   select(created_at, observed_on_string, 
          taxon.name, taxon.rank, taxon.preferred_common_name, 
-         uri, location, geoprivacy, 
+         uri, photos, location, geoprivacy, 
          positional_accuracy_meters = positional_accuracy, 
          user.login, park, parkName) |>
   filter(!parkName %in% c("AMME", "WAPA"))
-
-str(inat_obs)
 
 # 3. PACN iNaturalist obs ----
 veg_crew_obs <- inat_obs |>
@@ -100,7 +98,11 @@ inat_obs_all <- inat_obs |>
 inat_obs_filtered <- inat_obs_all |>
   filter(!str_detect(taxon.name, "Argyroxiphium")) |> # Drop silversword, too many weird hybrid names
   filter(taxon.rank %in% c("family", "genus", "species", "subspecies", 
-                           "variety", "hybrid", "genushybrid", "form"))
+                           "variety", "hybrid", "genushybrid", "form")) |>
+  # remove observations with no photos:
+  filter(map_lgl(photos, ~ !is.null(.x) && nrow(.x) > 0)) |>
+  select(-photos)
+
 
 inat_pacn_new_plants_all <- inat_obs_all |>
   anti_join(pacn_observations, by = c("taxon.name" = "pacn_observation", "parkName" = "Park"))
@@ -112,19 +114,33 @@ dropped <- inat_pacn_new_plants_all |>
   anti_join(inat_pacn_new_plants_filtered, by = "row_id")
 
 
-undocumented_pacn_obs <- inat_pacn_new_plants_filtered
-nrow(undocumented_pacn_obs) # 20260114 = 612
+undocumented_pacn_obs <- inat_pacn_new_plants_filtered |>
+  arrange(taxon.name, created_at)
+
+nrow(undocumented_pacn_obs) 
+# 20260114 = 612
+# 20260126 = 633
+# 20260203a = 614
+# 20260203b = 616
 
 undocumented_pacn_plants <- undocumented_pacn_obs |>
   group_by(taxon.name, parkName) |>
-  summarise(n = n())
-nrow(undocumented_pacn_plants) #20260114 =251
+  summarise(n = n()) |>
+  arrange(-n, taxon.name)
+
+nrow(undocumented_pacn_plants) 
+#20260114 = 251
+#20260126 = 253
+#20260203a = 239
+#20260203b = 240
 
 write_csv(undocumented_pacn_obs, "data/undocumented_pacn_obs.csv")
 write_csv(undocumented_pacn_plants, "data/undocumented_pacn_plants.csv")
 
-undoc_plants_old <- read_csv("data/undocumented_pacn_plants_old.csv")
+# Check differences between old undocumented plants list and new one:
+undocumented_pacn_obs_old <- read_csv("C:/Users/JJGross/R_git_repos/earlydetection_backup_copy/data/undocumented_pacn_obs_old.csv")
 
+undoc_plants_old <- read_csv("C:/Users/JJGross/R_git_repos/earlydetection_backup_copy/data/undocumented_pacn_plants_old.csv")
 undocumented_pacn_plants |>
   filter(!taxon.name %in% undoc_plants_old$taxon.name)
 

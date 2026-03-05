@@ -14,7 +14,7 @@ undocumented_pacn_obs <- read.csv("data/undocumented_pacn_obs.csv")
 #make a column for the label on the map
 head(format(as.Date(undocumented_pacn_obs$observed_on_string), "%b %Y"))
 
-undocumented_pacn_obs <- undocumented_pacn_obs |>
+undocumented_pacn_obs2 <- undocumented_pacn_obs |>
   mutate(obs_date = format(as.Date(observed_on_string), "%b %Y")) |>
   mutate(label = paste(taxon.name, '-', obs_date))
 

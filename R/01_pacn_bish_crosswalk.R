@@ -285,8 +285,8 @@ nrow(distinct(.data = names_changed, bish_scientificName))
 pacn_bish_crosswalk_with_synonyms <- pacn_bish_crosswalk |>
   left_join(y = synonyms, by = join_by(bish_accepted_name_id)) 
 
-write.csv(pacn_bish_crosswalk_with_synonyms, "data/pacn_bish_crosswalk_with_synonyms.csv")
-write.csv(pacn_bish_crosswalk, "data/pacn_bish_crosswalk.csv")
+write.csv(pacn_bish_crosswalk_with_synonyms, "data/pacn_bish_crosswalk_with_synonyms.csv", row.names = FALSE)
+write.csv(pacn_bish_crosswalk, "data/pacn_bish_crosswalk.csv", row.names = FALSE)
 
 
 
